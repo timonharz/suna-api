@@ -74,7 +74,6 @@ async def verify_sandbox_access(client, sandbox_id: str, user_id: Optional[str] 
 async def get_sandbox_by_id_safely(client, sandbox_id: str):
     """
     Safely retrieve a sandbox object by its ID, using the project that owns it.
-    This prevents race conditions by leveraging the distributed locking mechanism.
     
     Args:
         client: The Supabase client
@@ -97,7 +96,7 @@ async def get_sandbox_by_id_safely(client, sandbox_id: str):
     logger.debug(f"Found project {project_id} for sandbox {sandbox_id}")
     
     try:
-        # Use the race-condition-safe function to get the sandbox
+        # Get the sandbox
         sandbox, retrieved_sandbox_id, sandbox_pass = await get_or_create_project_sandbox(client, project_id)
         
         # Verify we got the right sandbox
@@ -120,6 +119,7 @@ async def create_file(
     user_id: Optional[str] = Depends(get_optional_user_id)
 ):
     """Create a file in the sandbox using direct file upload"""
+    logger.info(f"Received file upload request for sandbox {sandbox_id}, path: {path}, user_id: {user_id}")
     client = await db.client
     
     # Verify the user has access to this sandbox
@@ -150,6 +150,7 @@ async def create_file_json(
     user_id: Optional[str] = Depends(get_optional_user_id)
 ):
     """Create a file in the sandbox using JSON (legacy support)"""
+    logger.info(f"Received JSON file creation request for sandbox {sandbox_id}, user_id: {user_id}")
     client = await db.client
     
     # Verify the user has access to this sandbox
@@ -164,6 +165,7 @@ async def create_file_json(
         content = file_request.get("content", "")
         
         if not path:
+            logger.error(f"Missing file path in request for sandbox {sandbox_id}")
             raise HTTPException(status_code=400, detail="File path is required")
         
         # Convert string content to bytes
@@ -187,6 +189,7 @@ async def list_files(
     user_id: Optional[str] = Depends(get_optional_user_id)
 ):
     """List files and directories at the specified path"""
+    logger.info(f"Received list files request for sandbox {sandbox_id}, path: {path}, user_id: {user_id}")
     client = await db.client
     
     # Verify the user has access to this sandbox
@@ -214,6 +217,7 @@ async def list_files(
             )
             result.append(file_info)
         
+        logger.info(f"Successfully listed {len(result)} files in sandbox {sandbox_id}")
         return {"files": [file.dict() for file in result]}
     except Exception as e:
         logger.error(f"Error listing files in sandbox {sandbox_id}: {str(e)}")
@@ -227,6 +231,7 @@ async def read_file(
     user_id: Optional[str] = Depends(get_optional_user_id)
 ):
     """Read a file from the sandbox"""
+    logger.info(f"Received file read request for sandbox {sandbox_id}, path: {path}, user_id: {user_id}")
     client = await db.client
     
     # Verify the user has access to this sandbox
@@ -241,6 +246,7 @@ async def read_file(
         
         # Return a Response object with the content directly
         filename = os.path.basename(path)
+        logger.info(f"Successfully read file {filename} from sandbox {sandbox_id}")
         return Response(
             content=content,
             media_type="application/octet-stream",
@@ -259,14 +265,15 @@ async def ensure_project_sandbox_active(
     """
     Ensure that a project's sandbox is active and running.
     Checks the sandbox status and starts it if it's not running.
-    Uses distributed locking to prevent race conditions.
     """
+    logger.info(f"Received ensure sandbox active request for project {project_id}, user_id: {user_id}")
     client = await db.client
     
     # Find the project and sandbox information
     project_result = await client.table('projects').select('*').eq('project_id', project_id).execute()
     
     if not project_result.data or len(project_result.data) == 0:
+        logger.error(f"Project not found: {project_id}")
         raise HTTPException(status_code=404, detail="Project not found")
     
     project_data = project_result.data[0]
@@ -275,6 +282,7 @@ async def ensure_project_sandbox_active(
     if not project_data.get('is_public'):
         # For private projects, we must have a user_id
         if not user_id:
+            logger.error(f"Authentication required for private project {project_id}")
             raise HTTPException(status_code=401, detail="Authentication required for this resource")
             
         account_id = project_data.get('account_id')
@@ -283,11 +291,12 @@ async def ensure_project_sandbox_active(
         if account_id:
             account_user_result = await client.schema('basejump').from_('account_user').select('account_role').eq('user_id', user_id).eq('account_id', account_id).execute()
             if not (account_user_result.data and len(account_user_result.data) > 0):
+                logger.error(f"User {user_id} not authorized to access project {project_id}")
                 raise HTTPException(status_code=403, detail="Not authorized to access this project")
     
     try:
-        # Use the safer function that handles race conditions with distributed locking
-        logger.info(f"Ensuring sandbox is active for project {project_id} using distributed locking")
+        # Get or create the sandbox
+        logger.info(f"Ensuring sandbox is active for project {project_id}")
         sandbox, sandbox_id, sandbox_pass = await get_or_create_project_sandbox(client, project_id)
         
         logger.info(f"Successfully ensured sandbox {sandbox_id} is active for project {project_id}")

@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import {
   ArrowDown, CheckCircle, CircleDashed, AlertTriangle, Info, File, ChevronRight
 } from 'lucide-react';
-import { addUserMessage, getMessages, startAgent, stopAgent, getAgentRuns, getProject, getThread, updateProject, Project, Message as BaseApiMessageType } from '@/lib/api';
+import { addUserMessage, getMessages, startAgent, stopAgent, getAgentRuns, getProject, getThread, updateProject, Project, Message as BaseApiMessageType, BillingError } from '@/lib/api';
 import { toast } from 'sonner';
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChatInput } from '@/components/thread/chat-input';
@@ -19,9 +19,10 @@ import { useAgentStream } from '@/hooks/useAgentStream';
 import { Markdown } from '@/components/ui/markdown';
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { BillingErrorAlert } from '@/components/billing/BillingErrorAlert';
-import { SUBSCRIPTION_PLANS } from '@/components/billing/PlanComparison';
+import { BillingErrorAlert } from '@/components/billing/usage-limit-alert';
+import { SUBSCRIPTION_PLANS } from '@/components/billing/plan-comparison';
 import { createClient } from '@/lib/supabase/client';
+import { isLocalMode } from "@/lib/config";
 
 import { UnifiedMessage, ParsedContent, ParsedMetadata, ThreadParams } from '@/components/thread/types';
 import { getToolIcon, extractPrimaryParam, safeJsonParse } from '@/components/thread/utils';
@@ -223,7 +224,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
     currentUsage?: number;
     limit?: number;
     message?: string;
-    accountId?: string;
+    accountId?: string | null;
   }>({});
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -578,7 +579,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
     };
   }, [threadId]);
 
-  const handleSubmitMessage = useCallback(async (message: string) => {
+  const handleSubmitMessage = useCallback(async (message: string, options?: { model_name?: string; enable_thinking?: boolean }) => {
     if (!message.trim()) return;
     setIsSending(true);
 
@@ -600,30 +601,60 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
     try {
       const results = await Promise.allSettled([
         addUserMessage(threadId, message),
-        startAgent(threadId)
+        startAgent(threadId, options)
       ]);
 
+      // Handle failure to add the user message
       if (results[0].status === 'rejected') {
-        console.error("Failed to send message:", results[0].reason);
-        throw new Error(`Failed to send message: ${results[0].reason?.message || results[0].reason}`);
+        const reason = results[0].reason;
+        console.error("Failed to send message:", reason);
+        throw new Error(`Failed to send message: ${reason?.message || reason}`);
       }
 
+      // Handle failure to start the agent
       if (results[1].status === 'rejected') {
-        console.error("Failed to start agent:", results[1].reason);
-        throw new Error(`Failed to start agent: ${results[1].reason?.message || results[1].reason}`);
+        const error = results[1].reason;
+        console.error("Failed to start agent:", error);
+
+        // Check if it's our custom BillingError (402)
+        if (error instanceof BillingError) {
+          console.log("Caught BillingError:", error.detail);
+          // Extract billing details
+          setBillingData({
+            // Note: currentUsage and limit might not be in the detail from the backend yet
+            currentUsage: error.detail.currentUsage as number | undefined,
+            limit: error.detail.limit as number | undefined,
+            message: error.detail.message || 'Monthly usage limit reached. Please upgrade.', // Use message from error detail
+            accountId: project?.account_id || null // Pass account ID
+          });
+          setShowBillingAlert(true);
+          
+          // Remove the optimistic message since the agent couldn't start
+          setMessages(prev => prev.filter(m => m.message_id !== optimisticUserMessage.message_id));
+          return; // Stop further execution in this case
+        }
+        
+        // Handle other agent start errors
+        throw new Error(`Failed to start agent: ${error?.message || error}`);
       }
 
+      // If agent started successfully
       const agentResult = results[1].value;
       setAgentRunId(agentResult.agent_run_id);
 
     } catch (err) {
+      // Catch errors from addUserMessage or non-BillingError agent start errors
       console.error('Error sending message or starting agent:', err);
-      toast.error(err instanceof Error ? err.message : 'Operation failed');
+      // Don't show billing alert here, only for specific BillingError
+      if (!(err instanceof BillingError)) {
+        toast.error(err instanceof Error ? err.message : 'Operation failed');
+      }
+      // Ensure optimistic message is removed on any error during submit
       setMessages(prev => prev.filter(m => m.message_id !== optimisticUserMessage.message_id));
     } finally {
       setIsSending(false);
     }
-  }, [threadId]);
+  }, [threadId, project?.account_id]); // Ensure project.account_id is a dependency
 
   const handleStopAgent = useCallback(async () => {
     console.log(`[PAGE] Requesting agent stop via hook.`);
@@ -968,6 +999,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
     }
   }, [projectName]);
 
+
   // Add another useEffect to ensure messages are refreshed when agent status changes to idle
   useEffect(() => {
     if (agentStatus === 'idle' && streamHookStatus !== 'streaming' && streamHookStatus !== 'connecting') {
@@ -1010,6 +1042,12 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
 
   // Check billing status when agent completes
   const checkBillingStatus = useCallback(async () => {
+    // Skip billing checks in local development mode
+    if (isLocalMode()) {
+      console.log("Running in local development mode - billing checks are disabled");
+      return false;
+    }
+
     if (!project?.account_id) return;
     
     const supabase = createClient();
@@ -1077,7 +1115,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
             currentUsage: Number(hours.toFixed(2)),
             limit: FREE_PLAN_LIMIT_HOURS,
             message: `You've used ${Math.floor(minutesUsed)} minutes on the Free plan. The limit is ${FREE_PLAN_LIMIT_MINUTES} minutes per month.`,
-            accountId: project.account_id
+            accountId: project.account_id || null
           });
           setShowBillingAlert(true);
           return true; // Return true if over limit
@@ -1244,11 +1282,15 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
           />
           <div className="flex flex-1 items-center justify-center p-4">
             <div className="flex w-full max-w-md flex-col items-center gap-4 rounded-lg border bg-card p-6 text-center">
-              <h2 className="text-lg font-semibold text-destructive">Error</h2>
-              <p className="text-sm text-muted-foreground">{error}</p>
-              <Button variant="outline" onClick={() => router.push(`/projects/${project?.id || ''}`)}>
-                Back to Project
-              </Button>
+              <div className="rounded-full bg-destructive/10 p-3">
+                <AlertTriangle className="h-6 w-6 text-destructive" />
+              </div>
+              <h2 className="text-lg font-semibold text-destructive">Thread Not Found</h2>
+              <p className="text-sm text-muted-foreground">
+                {error.includes('JSON object requested, multiple (or no) rows returned') 
+                  ? 'This thread either does not exist or you do not have access to it.'
+                  : error}
+              </p>
             </div>
           </div>
         </div>
@@ -1579,7 +1621,7 @@ export default function ThreadPage({ params }: { params: Promise<ThreadParams> }
         message={billingData.message}
         currentUsage={billingData.currentUsage}
         limit={billingData.limit}
-        accountId={billingData.accountId || null}
+        accountId={billingData.accountId}
         onDismiss={() => setShowBillingAlert(false)}
         isOpen={showBillingAlert}
       />

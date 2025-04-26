@@ -2,24 +2,17 @@ from daytona_sdk.process import SessionExecuteRequest
 from typing import Optional
 
 from agentpress.tool import ToolResult, openapi_schema, xml_schema
-from sandbox.sandbox import SandboxToolsBase, Sandbox
+from sandbox.sandbox import SandboxToolsBase, Sandbox, get_or_start_sandbox
 from utils.files_utils import EXCLUDED_FILES, EXCLUDED_DIRS, EXCLUDED_EXT, should_exclude_file, clean_path
-<<<<<<< HEAD
-=======
 from agentpress.thread_manager import ThreadManager
->>>>>>> 63994f976006b80d9d59378dd5cb80e249e96891
+from utils.logger import logger
 import os
 
 class SandboxFilesTool(SandboxToolsBase):
     """Tool for executing file system operations in a Daytona sandbox. All operations are performed relative to the /workspace directory."""
 
-<<<<<<< HEAD
-    def __init__(self, sandbox: Sandbox):
-        super().__init__(sandbox)
-=======
     def __init__(self, project_id: str, thread_manager: ThreadManager):
         super().__init__(project_id, thread_manager)
->>>>>>> 63994f976006b80d9d59378dd5cb80e249e96891
         self.SNIPPET_LINES = 4  # Number of context lines to show around edits
         self.workspace_path = "/workspace"  # Ensure we're always operating in /workspace
 
@@ -43,12 +36,9 @@ class SandboxFilesTool(SandboxToolsBase):
         """Get the current workspace state by reading all files"""
         files_state = {}
         try:
-<<<<<<< HEAD
-=======
             # Ensure sandbox is initialized
             await self._ensure_sandbox()
             
->>>>>>> 63994f976006b80d9d59378dd5cb80e249e96891
             files = self.sandbox.fs.list_files(self.workspace_path)
             for file_info in files:
                 rel_path = file_info.name
@@ -76,6 +66,13 @@ class SandboxFilesTool(SandboxToolsBase):
         except Exception as e:
             print(f"Error getting workspace state: {str(e)}")
             return {}
+
+
+    def _get_preview_url(self, file_path: str) -> Optional[str]:
+        """Get the preview URL for a file if it's an HTML file."""
+        if file_path.lower().endswith('.html') and self._sandbox_url:
+            return f"{self._sandbox_url}/{(file_path.replace('/workspace/', ''))}"
+        return None
 
     @openapi_schema({
         "type": "function",
@@ -116,16 +113,11 @@ class SandboxFilesTool(SandboxToolsBase):
         '''
     )
     async def create_file(self, file_path: str, file_contents: str, permissions: str = "644") -> ToolResult:
-<<<<<<< HEAD
-        file_path = self.clean_path(file_path)
-        try:
-=======
         try:
             # Ensure sandbox is initialized
             await self._ensure_sandbox()
             
             file_path = self.clean_path(file_path)
->>>>>>> 63994f976006b80d9d59378dd5cb80e249e96891
             full_path = f"{self.workspace_path}/{file_path}"
             if self._file_exists(full_path):
                 return self.fail_response(f"File '{file_path}' already exists. Use update_file to modify existing files.")
@@ -139,7 +131,13 @@ class SandboxFilesTool(SandboxToolsBase):
             self.sandbox.fs.upload_file(full_path, file_contents.encode())
             self.sandbox.fs.set_file_permissions(full_path, permissions)
             
-            return self.success_response(f"File '{file_path}' created successfully.")
+            # Get preview URL if it's an HTML file
+            preview_url = self._get_preview_url(file_path)
+            message = f"File '{file_path}' created successfully."
+            if preview_url:
+                message += f"\n\nYou can preview this HTML file at the automatically served HTTP server: {preview_url}"
+            
+            return self.success_response(message)
         except Exception as e:
             return self.fail_response(f"Error creating file: {str(e)}")
 
@@ -184,12 +182,9 @@ class SandboxFilesTool(SandboxToolsBase):
     )
     async def str_replace(self, file_path: str, old_str: str, new_str: str) -> ToolResult:
         try:
-<<<<<<< HEAD
-=======
             # Ensure sandbox is initialized
             await self._ensure_sandbox()
             
->>>>>>> 63994f976006b80d9d59378dd5cb80e249e96891
             file_path = self.clean_path(file_path)
             full_path = f"{self.workspace_path}/{file_path}"
             if not self._file_exists(full_path):
@@ -216,7 +211,13 @@ class SandboxFilesTool(SandboxToolsBase):
             end_line = replacement_line + self.SNIPPET_LINES + new_str.count('\n')
             snippet = '\n'.join(new_content.split('\n')[start_line:end_line + 1])
             
-            return self.success_response(f"Replacement successful.")
+            # Get preview URL if it's an HTML file
+            preview_url = self._get_preview_url(file_path)
+            message = f"Replacement successful."
+            if preview_url:
+                message += f"\n\nYou can preview this HTML file at: {preview_url}"
+            
+            return self.success_response(message)
             
         except Exception as e:
             return self.fail_response(f"Error replacing string: {str(e)}")
@@ -264,12 +265,9 @@ class SandboxFilesTool(SandboxToolsBase):
     )
     async def full_file_rewrite(self, file_path: str, file_contents: str, permissions: str = "644") -> ToolResult:
         try:
-<<<<<<< HEAD
-=======
             # Ensure sandbox is initialized
             await self._ensure_sandbox()
             
->>>>>>> 63994f976006b80d9d59378dd5cb80e249e96891
             file_path = self.clean_path(file_path)
             full_path = f"{self.workspace_path}/{file_path}"
             if not self._file_exists(full_path):
@@ -278,7 +276,13 @@ class SandboxFilesTool(SandboxToolsBase):
             self.sandbox.fs.upload_file(full_path, file_contents.encode())
             self.sandbox.fs.set_file_permissions(full_path, permissions)
             
-            return self.success_response(f"File '{file_path}' completely rewritten successfully.")
+            # Get preview URL if it's an HTML file
+            preview_url = self._get_preview_url(file_path)
+            message = f"File '{file_path}' completely rewritten successfully."
+            if preview_url:
+                message += f"\n\nYou can preview this HTML file at: {preview_url}"
+            
+            return self.success_response(message)
         except Exception as e:
             return self.fail_response(f"Error rewriting file: {str(e)}")
 
@@ -311,12 +315,9 @@ class SandboxFilesTool(SandboxToolsBase):
     )
     async def delete_file(self, file_path: str) -> ToolResult:
         try:
-<<<<<<< HEAD
-=======
             # Ensure sandbox is initialized
             await self._ensure_sandbox()
             
->>>>>>> 63994f976006b80d9d59378dd5cb80e249e96891
             file_path = self.clean_path(file_path)
             full_path = f"{self.workspace_path}/{file_path}"
             if not self._file_exists(full_path):

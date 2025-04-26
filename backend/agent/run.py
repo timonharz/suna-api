@@ -10,6 +10,7 @@ from agent.tools.sb_deploy_tool import SandboxDeployTool
 from agent.tools.sb_expose_tool import SandboxExposeTool
 from agent.tools.web_search_tool import WebSearchTool
 from dotenv import load_dotenv
+from utils.config import config
 
 from agentpress.thread_manager import ThreadManager
 from agentpress.response_processor import ProcessorConfig
@@ -88,12 +89,10 @@ async def run_agent(
 >>>>>>> 63994f976006b80d9d59378dd5cb80e249e96891
     thread_manager.add_tool(MessageTool) # we are just doing this via prompt as there is no need to call it as a tool
  
-    if os.getenv("TAVILY_API_KEY"):
-        thread_manager.add_tool(WebSearchTool)
-    else:
-        print("TAVILY_API_KEY not found, WebSearchTool will not be available.")
-    
-    if os.getenv("RAPID_API_KEY"):
+    thread_manager.add_tool(WebSearchTool)
+        
+    # Add data providers tool if RapidAPI key is available
+    if config.RAPID_API_KEY:
         thread_manager.add_tool(DataProvidersTool)
 
     system_message = { "role": "system", "content": get_system_prompt() }
@@ -103,7 +102,7 @@ async def run_agent(
     
     while continue_execution and iteration_count < max_iterations:
         iteration_count += 1
-        print(f"Running iteration {iteration_count}...")
+        # logger.debug(f"Running iteration {iteration_count}...")
 
         # Billing check on each iteration - still needed within the iterations
         can_run, message, subscription = await check_billing_status(client, account_id)
@@ -187,13 +186,13 @@ async def run_agent(
             yield response 
             break
             
-        # Track if we see ask or complete tool calls
+        # Track if we see ask, complete, or web-browser-takeover tool calls
         last_tool_call = None
         
         async for chunk in response:
             # print(f"CHUNK: {chunk}") # Uncomment for detailed chunk logging
 
-            # Check for XML versions like <ask> or <complete> in assistant content chunks
+            # Check for XML versions like <ask>, <complete>, or <web-browser-takeover> in assistant content chunks
             if chunk.get('type') == 'assistant' and 'content' in chunk:
                 try:
                     # The content field might be a JSON string or object
@@ -207,8 +206,14 @@ async def run_agent(
                     assistant_text = assistant_content_json.get('content', '')
                     if isinstance(assistant_text, str): # Ensure it's a string
                          # Check for the closing tags as they signal the end of the tool usage
-                        if '</ask>' in assistant_text or '</complete>' in assistant_text:
-                           xml_tool = 'ask' if '</ask>' in assistant_text else 'complete'
+                        if '</ask>' in assistant_text or '</complete>' in assistant_text or '</web-browser-takeover>' in assistant_text:
+                           if '</ask>' in assistant_text:
+                               xml_tool = 'ask'
+                           elif '</complete>' in assistant_text:
+                               xml_tool = 'complete'
+                           elif '</web-browser-takeover>' in assistant_text:
+                               xml_tool = 'web-browser-takeover'
+                           
                            last_tool_call = xml_tool
                            print(f"Agent used XML tool: {xml_tool}")
                 except json.JSONDecodeError:
@@ -220,10 +225,9 @@ async def run_agent(
             yield chunk
         
         # Check if we should stop based on the last tool call
-        if last_tool_call in ['ask', 'complete']:
+        if last_tool_call in ['ask', 'complete', 'web-browser-takeover']:
             print(f"Agent decided to stop with tool: {last_tool_call}")
             continue_execution = False
-
 
 
 # # TESTING

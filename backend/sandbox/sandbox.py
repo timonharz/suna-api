@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from agentpress.tool import Tool
 from utils.logger import logger
+from utils.config import config
 from utils.files_utils import clean_path
 <<<<<<< HEAD
 =======
@@ -19,28 +20,28 @@ from agentpress.thread_manager import ThreadManager
 load_dotenv()
 
 logger.debug("Initializing Daytona sandbox configuration")
-config = DaytonaConfig(
-    api_key=os.getenv("DAYTONA_API_KEY"),
-    server_url=os.getenv("DAYTONA_SERVER_URL"),
-    target=os.getenv("DAYTONA_TARGET")
+daytona_config = DaytonaConfig(
+    api_key=config.DAYTONA_API_KEY,
+    server_url=config.DAYTONA_SERVER_URL,
+    target=config.DAYTONA_TARGET
 )
 
-if config.api_key:
+if daytona_config.api_key:
     logger.debug("Daytona API key configured successfully")
 else:
     logger.warning("No Daytona API key found in environment variables")
 
-if config.server_url:
-    logger.debug(f"Daytona server URL set to: {config.server_url}")
+if daytona_config.server_url:
+    logger.debug(f"Daytona server URL set to: {daytona_config.server_url}")
 else:
     logger.warning("No Daytona server URL found in environment variables")
 
-if config.target:
-    logger.debug(f"Daytona target set to: {config.target}")
+if daytona_config.target:
+    logger.debug(f"Daytona target set to: {daytona_config.target}")
 else:
     logger.warning("No Daytona target found in environment variables")
 
-daytona = Daytona(config)
+daytona = Daytona(daytona_config)
 logger.debug("Daytona client initialized")
 
 async def get_or_start_sandbox(sandbox_id: str):
@@ -91,16 +92,16 @@ def start_supervisord_session(sandbox: Sandbox):
         logger.error(f"Error starting supervisord session: {str(e)}")
         raise e
 
-def create_sandbox(password: str, sandbox_id: str = None):
+def create_sandbox(password: str, project_id: str = None):
     """Create a new sandbox with all required services configured and running."""
     
     logger.debug("Creating new Daytona sandbox environment")
     logger.debug("Configuring sandbox with browser-use image and environment variables")
     
     labels = None
-    if sandbox_id:
-        logger.debug(f"Using sandbox_id as label: {sandbox_id}")
-        labels = {'id': sandbox_id}
+    if project_id:
+        logger.debug(f"Using sandbox_id as label: {project_id}")
+        labels = {'id': project_id}
         
     params = CreateSandboxParams(
         image="adamcohenhillel/kortix-suna:0.0.20",
@@ -119,14 +120,6 @@ def create_sandbox(password: str, sandbox_id: str = None):
             "CHROME_DEBUGGING_HOST": "localhost",
             "CHROME_CDP": ""
         },
-        ports=[
-            6080,  # noVNC web interface
-            5900,  # VNC port
-            5901,  # VNC port
-            9222,  # Chrome remote debugging port
-            8080,   # HTTP website port
-            8002,  # The browser api port
-        ],
         resources={
             "cpu": 2,
             "memory": 4,
@@ -228,19 +221,19 @@ class SandboxToolsBase(Tool):
                 # Get or start the sandbox
                 self._sandbox = await get_or_start_sandbox(self._sandbox_id)
                 
-                # Log URLs if not already printed
-                if not SandboxToolsBase._urls_printed:
-                    vnc_link = self._sandbox.get_preview_link(6080)
-                    website_link = self._sandbox.get_preview_link(8080)
+                # # Log URLs if not already printed
+                # if not SandboxToolsBase._urls_printed:
+                #     vnc_link = self._sandbox.get_preview_link(6080)
+                #     website_link = self._sandbox.get_preview_link(8080)
                     
-                    vnc_url = vnc_link.url if hasattr(vnc_link, 'url') else str(vnc_link)
-                    website_url = website_link.url if hasattr(website_link, 'url') else str(website_link)
+                #     vnc_url = vnc_link.url if hasattr(vnc_link, 'url') else str(vnc_link)
+                #     website_url = website_link.url if hasattr(website_link, 'url') else str(website_link)
                     
-                    print("\033[95m***")
-                    print(f"VNC URL: {vnc_url}")
-                    print(f"Website URL: {website_url}")
-                    print("***\033[0m")
-                    SandboxToolsBase._urls_printed = True
+                #     print("\033[95m***")
+                #     print(f"VNC URL: {vnc_url}")
+                #     print(f"Website URL: {website_url}")
+                #     print("***\033[0m")
+                #     SandboxToolsBase._urls_printed = True
                 
             except Exception as e:
                 logger.error(f"Error retrieving sandbox for project {self.project_id}: {str(e)}", exc_info=True)
